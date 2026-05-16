@@ -186,3 +186,53 @@ PYTHONPATH=src python3 -m duplicate_ticket_detection.cli evaluate-sbert \
 ```
 
 輸出中的 `MAP` 是文獻主要使用的排名品質指標；`top_1_accuracy` 表示第一名候選是否就是 duplicate；`top_10_hit_rate` 表示前 10 名內是否至少有一筆正確 duplicate。
+
+## 一次跑完整比較
+
+`scripts/run_duplicate_experiments.py` 會一次跑：
+
+- TF-IDF baseline
+- `max`、`title75`、`content75`、`mean` 四種 title/content similarity 組合
+- SBERT `epochs=2`
+- SBERT `all-MiniLM-L6-v2` 與 `all-mpnet-base-v2` base model 比較
+
+```bash
+python3 scripts/run_duplicate_experiments.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --folds 5 \
+  --top-k 10 \
+  --sbert-epochs 2 \
+  --max-triplets 2000 \
+  --output-csv reports/duplicate_experiment_results.csv \
+  --output-md reports/duplicate_experiment_results.md
+```
+
+如果 base model 已經下載過，可加上 `--local-files-only` 避免每次連 Hugging Face 檢查。若 `all-mpnet-base-v2` 尚未下載，第一次請不要加 `--local-files-only`。
+
+如果只想先看 TF-IDF 和四種 combine 的快速 baseline：
+
+```bash
+python3 scripts/run_duplicate_experiments.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --folds 5 \
+  --top-k 10 \
+  --skip-sbert \
+  --output-csv reports/tfidf_combine_results.csv \
+  --output-md reports/tfidf_combine_results.md
+```
+
+若要快速試 SBERT 流程，可先降低 triplets：
+
+```bash
+python3 scripts/run_duplicate_experiments.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --folds 5 \
+  --top-k 10 \
+  --skip-tfidf \
+  --sbert-base-models sentence-transformers/all-MiniLM-L6-v2 \
+  --sbert-epochs 2 \
+  --max-triplets 500 \
+  --local-files-only \
+  --output-csv reports/sbert_minilm_e2_quick.csv \
+  --output-md reports/sbert_minilm_e2_quick.md
+```
