@@ -29,6 +29,18 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(triplets)
         self.assertTrue(any(triplet.anchor_id == "T-100" and triplet.positive_id == "T-101" for triplet in triplets))
 
+    def test_build_triplets_with_hard_negatives(self) -> None:
+        tickets = load_tickets(SAMPLE)
+        triplets = build_triplets(
+            tickets,
+            field="title",
+            negative_strategy="hard",
+            negatives_per_anchor=1,
+        )
+
+        self.assertTrue(triplets)
+        self.assertTrue(all(triplet.negative_id not in {triplet.anchor_id, triplet.positive_id} for triplet in triplets))
+
     def test_tfidf_detector_ranks_duplicate_first(self) -> None:
         tickets = load_tickets(SAMPLE)
         by_id = {ticket.ticket_id: ticket for ticket in tickets}

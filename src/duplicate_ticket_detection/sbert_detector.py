@@ -20,6 +20,7 @@ class SbertTrainingConfig:
     margin: float = 1.0
     warmup_steps: int = 100
     local_files_only: bool = False
+    device: str | None = None
 
 
 class SbertDuplicateDetector:
@@ -38,14 +39,17 @@ class SbertDuplicateDetector:
         content_triplets: Iterable[TripletRecord],
     ) -> "SbertDuplicateDetector":
         SentenceTransformer, InputExample, losses, torch = _load_sentence_transformers()
+        model_kwargs = {"local_files_only": self.config.local_files_only}
+        if self.config.device:
+            model_kwargs["device"] = self.config.device
 
         self.title_model = SentenceTransformer(
             self.config.base_model,
-            local_files_only=self.config.local_files_only,
+            **model_kwargs,
         )
         self.content_model = SentenceTransformer(
             self.config.base_model,
-            local_files_only=self.config.local_files_only,
+            **model_kwargs,
         )
 
         title_examples = [_to_input_example(triplet, InputExample) for triplet in title_triplets]

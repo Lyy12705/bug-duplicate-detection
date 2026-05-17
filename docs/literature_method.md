@@ -26,8 +26,23 @@ Reference: Haruna Isotani et al., "Sentence embedding and fine-tuning to automat
 - `triplets.py`: build anchor/positive/negative examples from duplicate groups.
 - `tfidf_detector.py`: runnable baseline ranking detector.
 - `sbert_detector.py`: optional SBERT triplet fine-tuning detector.
+- `decision.py`: converts ranking scores into a binary duplicate decision by tuning a validation threshold.
 - `metrics.py`: AP and MAP ranking metrics.
 - `cli.py`: experiment commands.
+
+## System decision layer
+
+The paper primarily evaluates duplicate detection as an information-retrieval ranking problem: a new report is compared with previous reports, previous reports are sorted by similarity, and MAP measures whether true duplicates appear near the top.
+
+For the student-project system, the ranking step is kept as the core literature method, then a thin decision layer is added:
+
+1. Split labeled historical tickets into train and validation sets.
+2. Fit the detector on train tickets.
+3. Score validation query-candidate pairs.
+4. Select the similarity threshold with the best F1 score.
+5. For a new ticket, rank historical tickets and mark it as duplicate when the highest similarity is at least the tuned threshold.
+
+This keeps the implementation faithful to the paper while producing the `Duplicate` / `New ticket` decision needed by the planned workflow.
 
 ## Dataset note
 
