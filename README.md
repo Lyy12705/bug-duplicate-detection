@@ -522,6 +522,38 @@ PYTHONPATH=src python3 -m duplicate_ticket_detection.cli tune-threshold \
   --output-decisions-csv reports/sbert_decision_threshold_p90_decisions.csv
 ```
 
+若要讓 decision threshold 跟目前最佳 Ranking 流程對齊，可改用 Top-1 mined hard negative 版本。下面這個流程會先挖錯誤 Top-1 當 hard negatives，重新訓練 SBERT，再用 `weighted:0.6,0.4 + rerank component:0.02` 調 threshold：
+
+```bash
+python3 scripts/tune_top1_mined_threshold.py \
+  --tickets data/mozilla_firefox_decision_eval.csv \
+  --combine weighted:0.6,0.4 \
+  --rerank-fields component:0.02 \
+  --epochs 1 \
+  --max-triplets 2000 \
+  --negative-strategy hard \
+  --negatives-per-anchor 3 \
+  --min-precision 0.70 \
+  --min-recall 0.50 \
+  --output-json reports/top1_mined_decision_threshold_balanced.json \
+  --output-decisions-csv reports/top1_mined_decision_threshold_balanced_decisions.csv
+```
+
+如果不想預先固定 precision / recall 約束，而是直接找 F1 最佳的 threshold，可以拿掉 `--min-precision` 和 `--min-recall`：
+
+```bash
+python3 scripts/tune_top1_mined_threshold.py \
+  --tickets data/mozilla_firefox_decision_eval.csv \
+  --combine weighted:0.6,0.4 \
+  --rerank-fields component:0.02 \
+  --epochs 1 \
+  --max-triplets 2000 \
+  --negative-strategy hard \
+  --negatives-per-anchor 3 \
+  --output-json reports/top1_mined_decision_threshold_best_f1.json \
+  --output-decisions-csv reports/top1_mined_decision_threshold_best_f1_decisions.csv
+```
+
 若要測試更多 metadata 特徵，可把 rerank 欄位改成：
 
 ```bash
@@ -529,6 +561,56 @@ PYTHONPATH=src python3 -m duplicate_ticket_detection.cli tune-threshold \
 ```
 
 目前較建議把系統定位為 duplicate candidate recommendation：先顯示 Top-k 疑似重複 ticket 給工程師複核。只有在 classifier 或 threshold 很有信心時，才自動標記 duplicate；中間分數區間保留人工確認，可以避免 false negative 過高。
+
+## 半自動 duplicate 複核流程
+
+目前實驗顯示 Ranking 指標比單一 threshold decision 更穩定，因此系統先採用半自動化流程：
+
+1. 模型產生 Top-k duplicate candidates。
+2. 系統輸出每個候選的 similarity score、title/content score、metadata 是否一致。
+3. 工程師查看候選清單後決定是否標記 duplicate。
+4. 工程師確認過的錯誤案例可回收成 hard negatives，持續改善 Top-1。
+
+產生工程師複核 CSV：
+
+```bash
+python3 scripts/export_duplicate_review_queue.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --method tfidf \
+  --combine weighted:0.6,0.4 \
+  --top-k 10 \
+  --rerank-fields component:0.02 \
+  --output-csv reports/duplicate_review_queue.csv \
+  --summary-md reports/duplicate_review_queue_summary.md
+```
+
+若已經有訓練好的 SBERT 模型，可改用：
+
+```bash
+python3 scripts/export_duplicate_review_queue.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --method sbert \
+  --model-dir models/duplicate_sbert \
+  --combine weighted:0.6,0.4 \
+  --top-k 10 \
+  --rerank-fields component:0.02 \
+  --output-csv reports/duplicate_review_queue.csv \
+  --summary-md reports/duplicate_review_queue_summary.md
+```
+
+若要針對一張新 ticket 輸出候選清單：
+
+```bash
+python3 scripts/export_duplicate_review_queue.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --method sbert \
+  --model-dir models/duplicate_sbert \
+  --query-json data/new_ticket.json \
+  --top-k 10 \
+  --rerank-fields component:0.02
+```
+
+輸出的 CSV 不會直接說「一定重複」，而是提供 `review_priority`、`rank`、`candidate_score`、`component_match`、`product_match` 等欄位，讓工程師做最後判斷。
 
 若要針對 Top-1 錯誤做 error analysis：
 
@@ -540,6 +622,27 @@ python3 scripts/analyze_duplicate_errors.py \
   --output-csv reports/top1_error_analysis.csv \
   --summary-md reports/top1_error_summary.md
 ```
+
+若要進一步改善 Top-1，可跑專用實驗：先用第一輪 SBERT 在 train fold 找出「錯排第 1 名」的候選，再把這些錯誤 Top-1 當成額外 hard negatives 重新訓練，最後一次測多組 metadata rerank 權重：
+
+```bash
+python3 scripts/run_top1_improvement_experiments.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --folds 5 \
+  --top-k 10 \
+  --epochs 1 \
+  --max-triplets 2000 \
+  --negative-strategy hard \
+  --negatives-per-anchor 3 \
+  --output-csv reports/top1_improvement_experiment_results.csv \
+  --output-md reports/top1_improvement_experiment_results.md
+```
+
+這個腳本會輸出：
+
+- `reports/top1_improvement_experiment_results.csv`：各組 combine/rerank 的 MAP、Top-1、Top-k、Recall、MRR。
+- `reports/top1_mined_hard_negatives.csv`：每個 fold 從 train 資料挖出的錯誤 Top-1 hard negatives。
+- `reports/top1_improvement_error_analysis.csv`：重新訓練與 rerank 後仍排錯第 1 名的案例，方便繼續分析錯誤是否集中在特定 product/component。
 
 若要檢查 duplicate master ticket 是否缺失：
 

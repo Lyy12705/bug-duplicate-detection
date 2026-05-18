@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 DEFAULT_RESULTS_CSV = "reports/duplicate_experiment_results.csv"
+DEFAULT_DECISION_JSON = "sbert_decision_threshold_p90.json"
 DEFAULT_REPORTS_DIR = "reports"
 REQUIRED_RESULT_COLUMNS = {
     "experiment",
@@ -71,6 +72,9 @@ class DecisionResult:
     validation: int = 0
     min_precision: float | None = None
     min_recall: float | None = None
+    rerank_fields: str = ""
+    base_model: str = ""
+    constraints_satisfied: bool | None = None
 
 
 def main() -> int:
@@ -194,6 +198,9 @@ def resolve_decision_json(decision_json: str | None, *, reports_dir: Path, auto:
         raise SystemExit(f"Decision JSON not found: {path}")
     if not auto:
         return None
+    preferred = reports_dir / DEFAULT_DECISION_JSON
+    if preferred.exists() and is_decision_json(preferred):
+        return preferred
     discovered = discover_decision_jsons(reports_dir)
     return discovered[0] if discovered else None
 
@@ -313,6 +320,8 @@ def render_decision_matrix(result: DecisionResult) -> str:
     metric_rows = [
         ("Method", result.method or "-"),
         ("Combine", result.combine or "-"),
+        ("Rerank fields", result.rerank_fields or "-"),
+        ("Base model", result.base_model or "-"),
         ("Split", result.split or "-"),
         ("Train", str(result.train)),
         ("Validation", str(result.validation)),
@@ -320,6 +329,7 @@ def render_decision_matrix(result: DecisionResult) -> str:
         ("Positive queries", str(result.positive_queries)),
         ("Min precision", format_optional(result.min_precision)),
         ("Min recall", format_optional(result.min_recall)),
+        ("Constraints satisfied", format_bool(result.constraints_satisfied)),
         ("Threshold", f"{result.threshold:.6f}"),
         ("Precision", f"{result.precision:.4f}"),
         ("Recall", f"{result.recall:.4f}"),
@@ -374,6 +384,12 @@ def format_optional(value: float | None) -> str:
     return f"{value:.4f}"
 
 
+def format_bool(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return str(value).lower()
+
+
 def read_decision_json(path: Path) -> DecisionResult:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -401,6 +417,9 @@ def read_decision_json(path: Path) -> DecisionResult:
         validation=_int_cell(data.get("validation", metrics.get("validation"))),
         min_precision=_optional_float_cell(data.get("min_precision", metrics.get("min_precision"))),
         min_recall=_optional_float_cell(data.get("min_recall", metrics.get("min_recall"))),
+        rerank_fields=str(data.get("rerank_fields", metrics.get("rerank_fields", "")) or ""),
+        base_model=str(data.get("base_model", metrics.get("base_model", "")) or ""),
+        constraints_satisfied=_optional_bool_cell(data.get("constraints_satisfied", metrics.get("constraints_satisfied"))),
     )
 
 
@@ -434,6 +453,14 @@ def _optional_float_cell(value: str | None) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _optional_bool_cell(value) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() == "true"
 
 
 def _int_cell(value: str | None) -> int:

@@ -104,6 +104,10 @@ class ShowDuplicateResultsTest(unittest.TestCase):
             self.assertIn("0.3519", table)
             self.assertIn("Precision", table)
             self.assertIn("0.9064", table)
+            self.assertIn("Rerank fields", table)
+            self.assertIn("component:0.02", table)
+            self.assertIn("Constraints satisfied", table)
+            self.assertIn("true", table)
             self.assertIn("Non-duplicate", table)
             self.assertIn("19", table)
 
@@ -116,6 +120,18 @@ class ShowDuplicateResultsTest(unittest.TestCase):
             selected = resolve_decision_json(None, reports_dir=reports_dir, auto=True)
 
             self.assertEqual(selected, path)
+
+    def test_auto_prefers_conservative_sbert_p90_decision_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports_dir = Path(tmpdir)
+            latest = reports_dir / "top1_mined_decision_threshold_balanced.json"
+            preferred = reports_dir / "sbert_decision_threshold_p90.json"
+            write_decision_json(latest)
+            write_decision_json(preferred)
+
+            selected = resolve_decision_json(None, reports_dir=reports_dir, auto=True)
+
+            self.assertEqual(selected, preferred)
 
 
 def write_result_csv(path: Path, *, experiment: str, map_score: float) -> None:
@@ -168,6 +184,9 @@ def write_decision_json(path: Path) -> None:
                 "correct_duplicate_links": 121,
                 "min_precision": 0.9,
                 "min_recall": None,
+                "rerank_fields": "component:0.02",
+                "base_model": "sentence-transformers/all-MiniLM-L6-v2",
+                "constraints_satisfied": True,
             }
         ),
         encoding="utf-8",
