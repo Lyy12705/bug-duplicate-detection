@@ -567,7 +567,7 @@ python3 scripts/tune_top1_mined_threshold.py \
 目前實驗顯示 Ranking 指標比單一 threshold decision 更穩定，因此系統先採用半自動化流程：
 
 1. 模型產生 Top-k duplicate candidates。
-2. 系統輸出每個候選的 similarity score、title/content score、metadata 是否一致。
+2. 系統輸出每個候選的 similarity score、title/content score、metadata 是否一致，以及 TF-IDF 是否也把它排在前面。
 3. 工程師查看候選清單後決定是否標記 duplicate。
 4. 工程師確認過的錯誤案例可回收成 hard negatives，持續改善 Top-1。
 
@@ -583,6 +583,23 @@ python3 scripts/export_duplicate_review_queue.py \
   --output-csv reports/duplicate_review_queue.csv \
   --summary-md reports/duplicate_review_queue_summary.md
 ```
+
+`export_duplicate_review_queue.py` 預設會啟用 stable rerank：主模型排序仍是主要訊號，但會混合 TF-IDF 排名一致性、metadata 一致性與 Top-1 margin，讓工程師看到的候選順序更穩定。若要調整穩定排序權重：
+
+```bash
+python3 scripts/export_duplicate_review_queue.py \
+  --tickets data/mozilla_firefox_duplicates.csv \
+  --method sbert \
+  --model-dir models/duplicate_sbert \
+  --combine weighted:0.6,0.4 \
+  --top-k 10 \
+  --rerank-fields component:0.02 \
+  --stable-tfidf-weight 0.30 \
+  --stable-metadata-weight 0.08 \
+  --stable-agreement-weight 0.08
+```
+
+若要回到單一模型排序，可加上 `--no-stable-rerank`。
 
 若已經有訓練好的 SBERT 模型，可改用：
 
@@ -610,7 +627,7 @@ python3 scripts/export_duplicate_review_queue.py \
   --rerank-fields component:0.02
 ```
 
-輸出的 CSV 不會直接說「一定重複」，而是提供 `review_priority`、`rank`、`candidate_score`、`component_match`、`product_match` 等欄位，讓工程師做最後判斷。
+輸出的 CSV 不會直接說「一定重複」，而是提供 `review_priority`、`review_confidence`、`rank_agreement`、`stable_score`、`model_score`、`tfidf_score`、`component_match`、`product_match` 等欄位，讓工程師做最後判斷。`review_confidence=strong` 表示多個訊號一致；`needs_review` 表示候選仍值得看，但排序信心較低。
 
 若要針對 Top-1 錯誤做 error analysis：
 
