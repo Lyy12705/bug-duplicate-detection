@@ -22,6 +22,9 @@ class QueryDecision:
     score: float
     is_duplicate: bool
     best_is_correct_duplicate: bool
+    title_score: float = 0.0
+    content_score: float = 0.0
+    second_score: float = float("-inf")
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,7 @@ def collect_query_decisions(
         if rerank_config is not None:
             ranking = rerank_ranked_tickets(query, ranking, candidate_records, rerank_config)
         best = ranking[0] if ranking else None
+        second = ranking[1] if len(ranking) > 1 else None
         best_candidate_id = "" if best is None else best.ticket_id
         best_score = float("-inf") if best is None else best.score
         decisions.append(
@@ -109,6 +113,9 @@ def collect_query_decisions(
                 score=best_score,
                 is_duplicate=bool(relevant),
                 best_is_correct_duplicate=best_candidate_id in relevant,
+                title_score=0.0 if best is None else best.title_score,
+                content_score=0.0 if best is None else best.content_score,
+                second_score=float("-inf") if second is None else second.score,
             )
         )
     return decisions

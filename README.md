@@ -401,6 +401,39 @@ python3 scripts/analyze_false_positives.py \
   --summary-md reports/tfidf_false_positive_summary_p90.md
 ```
 
+若目前最大的問題是漏抓 duplicate，可分析 false negatives。這會區分「Top-1 其實是正確 duplicate 但分數低於 threshold」與「Top-1 本身就排錯」：
+
+```bash
+python3 scripts/analyze_false_negatives.py \
+  --decisions-csv reports/sbert_decision_threshold_p90_decisions.csv \
+  --output-csv reports/sbert_false_negatives_p90.csv \
+  --summary-md reports/sbert_false_negative_summary_p90.md
+```
+
+若不想只固定 `min_precision=0.90`，可直接用既有 decisions CSV 重新掃不同 threshold，不需要重跑 SBERT：
+
+```bash
+python3 scripts/sweep_decision_thresholds.py \
+  --decisions-csv reports/sbert_decision_threshold_p90_decisions.csv \
+  --scenario best_f1:-:- \
+  --scenario precision80_recall30:0.80:0.30 \
+  --scenario precision70_recall50:0.70:0.50 \
+  --output-csv reports/sbert_threshold_sweep.csv
+```
+
+若已經知道希望 recall 至少達到某個值，也可以在 `tune-threshold` 直接加上 `--min-recall`，例如 `--min-precision 0.70 --min-recall 0.50`。
+
+若要把 duplicate / non-duplicate 判斷從單一 threshold 改成二元分類器，可用 decisions CSV 訓練 logistic regression。特徵包含 Top-1 score、title/content score、Top-1 與 Top-2 的 margin，以及 `component`、`product`、`severity`、`priority` 是否一致；若有 TF-IDF 或 BM25 的 decisions CSV，也可以用 `--extra-decisions-csv tfidf=...` 或 `--extra-decisions-csv bm25=...` 合併額外分數：
+
+```bash
+python3 scripts/train_duplicate_decision_classifier.py \
+  --decisions-csv reports/sbert_decision_threshold_p90_decisions.csv \
+  --extra-decisions-csv tfidf=reports/tfidf_decision_threshold_p90_decisions.csv \
+  --output-json reports/decision_classifier_metrics.json \
+  --output-model models/duplicate_decision_classifier.joblib \
+  --output-predictions-csv reports/decision_classifier_predictions.csv
+```
+
 若要快速試 SBERT 流程，可先降低 triplets：
 
 ```bash
@@ -495,6 +528,8 @@ PYTHONPATH=src python3 -m duplicate_ticket_detection.cli tune-threshold \
 --rerank-fields component:0.02 product:0.01 severity:0.005 priority:0.005
 ```
 
+目前較建議把系統定位為 duplicate candidate recommendation：先顯示 Top-k 疑似重複 ticket 給工程師複核。只有在 classifier 或 threshold 很有信心時，才自動標記 duplicate；中間分數區間保留人工確認，可以避免 false negative 過高。
+
 若要針對 Top-1 錯誤做 error analysis：
 
 ```bash
@@ -502,7 +537,8 @@ python3 scripts/analyze_duplicate_errors.py \
   --tickets data/mozilla_firefox_duplicates.csv \
   --method tfidf \
   --combine mean \
-  --output-csv reports/top1_error_analysis.csv
+  --output-csv reports/top1_error_analysis.csv \
+  --summary-md reports/top1_error_summary.md
 ```
 
 若要檢查 duplicate master ticket 是否缺失：

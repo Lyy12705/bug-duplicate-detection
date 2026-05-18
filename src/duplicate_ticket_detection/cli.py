@@ -562,7 +562,7 @@ def _collect_threshold_decisions(detector, queries: list[TicketRecord], candidat
             content_scores,
             rerank_config,
         )
-    return _query_decisions_from_scores(queries, candidates, scores)
+    return _query_decisions_from_scores(queries, candidates, scores, title_scores=title_scores, content_scores=content_scores)
 
 
 def _tfidf_score_matrices(detector: TfidfDuplicateDetector, queries: list[TicketRecord], candidates: list[TicketRecord]) -> tuple[np.ndarray, np.ndarray]:
@@ -604,7 +604,14 @@ def _sbert_score_matrices(detector: SbertDuplicateDetector, queries: list[Ticket
     return np.asarray(title_queries @ title_candidates.T), np.asarray(content_queries @ content_candidates.T)
 
 
-def _query_decisions_from_scores(queries: list[TicketRecord], candidates: list[TicketRecord], scores: np.ndarray) -> list[QueryDecision]:
+def _query_decisions_from_scores(
+    queries: list[TicketRecord],
+    candidates: list[TicketRecord],
+    scores: np.ndarray,
+    *,
+    title_scores: np.ndarray | None = None,
+    content_scores: np.ndarray | None = None,
+) -> list[QueryDecision]:
     decisions: list[QueryDecision] = []
     for query_index, query in enumerate(queries):
         relevant = relevant_duplicate_ids(query, candidates)
@@ -612,10 +619,15 @@ def _query_decisions_from_scores(queries: list[TicketRecord], candidates: list[T
         for candidate_index, candidate in enumerate(candidates):
             if candidate.ticket_id == query.ticket_id:
                 query_scores[candidate_index] = -np.inf
-        best_index = int(np.argmax(query_scores)) if len(query_scores) else -1
+        ranked_indices = np.argsort(-query_scores) if len(query_scores) else np.array([], dtype=int)
+        best_index = int(ranked_indices[0]) if len(ranked_indices) else -1
+        second_index = int(ranked_indices[1]) if len(ranked_indices) > 1 else -1
         best_candidate = candidates[best_index] if best_index >= 0 else None
         best_candidate_id = "" if best_candidate is None else best_candidate.ticket_id
         best_score = float("-inf") if best_index < 0 else float(query_scores[best_index])
+        second_score = float("-inf") if second_index < 0 else float(query_scores[second_index])
+        best_title_score = 0.0 if title_scores is None or best_index < 0 else float(title_scores[query_index, best_index])
+        best_content_score = 0.0 if content_scores is None or best_index < 0 else float(content_scores[query_index, best_index])
         decisions.append(
             QueryDecision(
                 query_id=query.ticket_id,
@@ -623,6 +635,9 @@ def _query_decisions_from_scores(queries: list[TicketRecord], candidates: list[T
                 score=best_score,
                 is_duplicate=bool(relevant),
                 best_is_correct_duplicate=best_candidate_id in relevant,
+                title_score=best_title_score,
+                content_score=best_content_score,
+                second_score=second_score,
             )
         )
     return decisions
@@ -647,6 +662,10 @@ def write_query_decisions_csv(
         "outcome",
         "best_candidate_id",
         "score",
+        "title_score",
+        "content_score",
+        "second_score",
+        "score_margin",
         "threshold",
         "best_is_correct_duplicate",
         "query_title",
@@ -673,6 +692,7 @@ def write_query_decisions_csv(
             query = query_by_id.get(decision.query_id)
             candidate = candidate_by_id.get(decision.best_candidate_id)
             predicted = decision.score >= threshold
+            score_margin = decision.score - decision.second_score
             writer.writerow(
                 {
                     "query_id": decision.query_id,
@@ -681,6 +701,10 @@ def write_query_decisions_csv(
                     "outcome": _decision_outcome(actual=decision.is_duplicate, predicted=predicted),
                     "best_candidate_id": decision.best_candidate_id,
                     "score": "" if not np.isfinite(decision.score) else f"{decision.score:.6f}",
+                    "title_score": f"{decision.title_score:.6f}",
+                    "content_score": f"{decision.content_score:.6f}",
+                    "second_score": "" if not np.isfinite(decision.second_score) else f"{decision.second_score:.6f}",
+                    "score_margin": "" if not np.isfinite(score_margin) else f"{score_margin:.6f}",
                     "threshold": f"{threshold:.6f}",
                     "best_is_correct_duplicate": str(decision.best_is_correct_duplicate).lower(),
                     "query_title": "" if query is None else query.title,

@@ -72,6 +72,18 @@ class DecisionTest(unittest.TestCase):
         self.assertEqual(len(decisions), 1)
         self.assertFalse(decisions[0].is_duplicate)
 
+    def test_collect_query_decisions_keeps_decision_features(self) -> None:
+        tickets = load_tickets(SAMPLE)
+        by_id = {ticket.ticket_id: ticket for ticket in tickets}
+        detector = TfidfDuplicateDetector().fit(tickets)
+
+        decisions = collect_query_decisions(detector, [by_id["T-100"]], tickets)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertGreaterEqual(decisions[0].title_score, 0.0)
+        self.assertGreaterEqual(decisions[0].content_score, 0.0)
+        self.assertGreaterEqual(decisions[0].score, decisions[0].second_score)
+
     def test_tune_query_threshold_can_enforce_min_precision(self) -> None:
         decisions = [
             QueryDecision("Q1", "A", 0.90, True, True),
