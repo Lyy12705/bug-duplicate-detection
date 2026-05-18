@@ -83,7 +83,7 @@ def main() -> int:
         default=True,
         help=(
             "Show a decision/threshold confusion matrix when one is available. "
-            "Use --no-show-decision-matrix to print only the ranking table."
+            "Use --no-show-decision-matrix to print only the best ranking result."
         ),
     )
     parser.add_argument("--reports-dir", default=DEFAULT_REPORTS_DIR, help="Directory to auto-search when --results-csv is omitted")
@@ -94,7 +94,6 @@ def main() -> int:
         help="When --results-csv is omitted: best=highest selected metric, latest=newest CSV, default=legacy default path",
     )
     parser.add_argument("--fold", default="mean", help="Fold to display. Defaults to the final mean rows.")
-    parser.add_argument("--top", type=int, default=10, help="Maximum rows to show")
     parser.add_argument("--sort-by", choices=tuple(SORT_COLUMNS.keys()), default="MAP")
     args = parser.parse_args()
 
@@ -116,11 +115,10 @@ def main() -> int:
         raise SystemExit(f"No rows for fold={args.fold}. Available folds: {available_folds}")
 
     selected_rows = sorted(selected_rows, key=lambda row: sort_value(row, sort_column), reverse=True)
-    if args.top > 0:
-        selected_rows = selected_rows[: args.top]
+    best_row = selected_rows[0]
 
     print(f"results_csv={path}")
-    print(render_results_table(selected_rows, title=f"Duplicate Ticket Results ({args.fold})"))
+    print(render_best_ranking_result(best_row, title=f"Best Ranking Result ({args.fold}, sort_by={args.sort_by})"))
 
     decision_path = resolve_decision_json(
         args.decision_json,
@@ -277,30 +275,74 @@ def render_results_table(rows: list[ResultRow], *, title: str) -> str:
     return "\n".join(lines)
 
 
+def render_best_ranking_result(row: ResultRow, *, title: str) -> str:
+    rows = [
+        ("Experiment", row.experiment),
+        ("Method", row.method),
+        ("Combine", row.combine),
+        ("Base model", row.base_model or "-"),
+        ("Epochs", str(row.epochs or "-")),
+        ("Max triplets", str(row.max_triplets or "-")),
+        ("Queries", str(row.queries)),
+        ("MAP", f"{row.mean_average_precision:.4f}"),
+        ("Top-1", f"{row.top_1_accuracy:.4f}"),
+        ("Top-k", f"{row.top_k_hit_rate:.4f}"),
+        ("Recall", format_optional(row.recall_at_k)),
+        ("MRR", f"{row.mean_reciprocal_rank:.4f}"),
+        ("Seconds", f"{row.seconds:.1f}"),
+    ]
+    label_width = max(len(label) for label, _ in rows)
+    value_width = max(len(value) for _, value in rows)
+    header = f"{'Metric':<{label_width}}  {'Value':<{value_width}}"
+    separator = "-" * len(header)
+    lines = [
+        title,
+        header,
+        separator,
+    ]
+    for label, value in rows:
+        lines.append(f"{label:<{label_width}}  {value:<{value_width}}")
+    return "\n".join(lines)
+
+
 def render_decision_matrix(result: DecisionResult) -> str:
     actual_non_duplicate = result.true_negatives + result.false_positives
     actual_duplicate = result.false_negatives + result.true_positives
     false_positive_rate = ratio(result.false_positives, actual_non_duplicate)
     false_negative_rate = ratio(result.false_negatives, actual_duplicate)
+    metric_rows = [
+        ("Method", result.method or "-"),
+        ("Combine", result.combine or "-"),
+        ("Split", result.split or "-"),
+        ("Train", str(result.train)),
+        ("Validation", str(result.validation)),
+        ("Queries", str(result.queries)),
+        ("Positive queries", str(result.positive_queries)),
+        ("Min precision", format_optional(result.min_precision)),
+        ("Min recall", format_optional(result.min_recall)),
+        ("Threshold", f"{result.threshold:.6f}"),
+        ("Precision", f"{result.precision:.4f}"),
+        ("Recall", f"{result.recall:.4f}"),
+        ("F1", f"{result.f1:.4f}"),
+        ("Accuracy", f"{result.accuracy:.4f}"),
+        ("False positive rate", f"{false_positive_rate:.4f}"),
+        ("False negative rate", f"{false_negative_rate:.4f}"),
+        ("Correct duplicate links", str(result.correct_duplicate_links)),
+    ]
+    label_width = max(len(label) for label, _ in metric_rows)
+    value_width = max(len(value) for _, value in metric_rows)
+    header = f"{'Metric':<{label_width}}  {'Value':<{value_width}}"
+    separator = "-" * len(header)
 
-    lines = ["Duplicate Decision Confusion Matrix"]
-    if result.method or result.combine:
-        lines.append(f"method={result.method or '-'} combine={result.combine or '-'} split={result.split or '-'}")
-    if result.train or result.validation:
-        lines.append(f"train={result.train} validation={result.validation} queries={result.queries} positive_queries={result.positive_queries}")
-    if result.min_precision is not None or result.min_recall is not None:
-        lines.append(
-            f"constraints min_precision={format_optional(result.min_precision)} min_recall={format_optional(result.min_recall)}"
-        )
-    lines.append(
-        f"threshold={result.threshold:.6f} precision={result.precision:.4f} "
-        f"recall={result.recall:.4f} f1={result.f1:.4f} accuracy={result.accuracy:.4f}"
-    )
-    lines.append(
-        f"false_positive_rate={false_positive_rate:.4f} false_negative_rate={false_negative_rate:.4f} "
-        f"correct_duplicate_links={result.correct_duplicate_links}"
-    )
+    lines = [
+        "Duplicate Decision Metrics",
+        header,
+        separator,
+    ]
+    for label, value in metric_rows:
+        lines.append(f"{label:<{label_width}}  {value:<{value_width}}")
     lines.append("")
+    lines.append("Duplicate Decision Confusion Matrix")
     lines.append(f"{'Actual \\ Predicted':<24} {'Non-duplicate':>14} {'Duplicate':>12}")
     lines.append("-" * 52)
     lines.append(f"{'Non-duplicate':<24} {result.true_negatives:>14} {result.false_positives:>12}")

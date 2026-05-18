@@ -11,6 +11,7 @@ from scripts.show_duplicate_results import (
     read_decision_json,
     read_results_csv,
     render_decision_matrix,
+    render_best_ranking_result,
     render_results_table,
     resolve_decision_json,
     resolve_results_csv,
@@ -70,6 +71,25 @@ class ShowDuplicateResultsTest(unittest.TestCase):
             self.assertNotIn("P@k", table)
             self.assertNotIn("R@k", table)
 
+    def test_best_ranking_result_renders_metric_value_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "results.csv"
+            write_result_csv(path, experiment="sbert_mean", map_score=0.65)
+
+            row = read_results_csv(path)[0]
+            summary = render_best_ranking_result(row, title="Best Ranking Result")
+
+            self.assertIn("Best Ranking Result", summary)
+            self.assertIn("Metric", summary)
+            self.assertIn("Value", summary)
+            self.assertIn("Experiment", summary)
+            self.assertIn("sbert_mean", summary)
+            self.assertIn("0.6500", summary)
+            self.assertIn("0.8000", summary)
+            self.assertIn("Base model", summary)
+            self.assertNotIn("Rank  Method", summary)
+            self.assertNotIn("|", summary)
+
     def test_decision_matrix_renders_false_positives(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "tfidf_decision_threshold.json"
@@ -78,8 +98,12 @@ class ShowDuplicateResultsTest(unittest.TestCase):
             result = read_decision_json(path)
             table = render_decision_matrix(result)
 
+            self.assertIn("Duplicate Decision Metrics", table)
             self.assertIn("Duplicate Decision Confusion Matrix", table)
-            self.assertIn("false_positive_rate=0.3519", table)
+            self.assertIn("False positive rate", table)
+            self.assertIn("0.3519", table)
+            self.assertIn("Precision", table)
+            self.assertIn("0.9064", table)
             self.assertIn("Non-duplicate", table)
             self.assertIn("19", table)
 

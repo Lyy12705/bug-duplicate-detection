@@ -336,7 +336,7 @@ python3 scripts/show_duplicate_results.py \
   --results-csv reports/tfidf_combine_results.csv
 ```
 
-預設會顯示 `fold=mean` 的 MAP、Top-1、Top-k hit rate、MRR 排行榜。若沒有指定 `--results-csv`，腳本會自動掃描 `reports/*.csv`，並依照目前排序指標選出分數最好的實驗結果 CSV：
+預設會顯示 `fold=mean` 中目前最佳的一筆 ranking 結果，包含 MAP、Top-1、Top-k hit rate、Recall、MRR。若沒有指定 `--results-csv`，腳本會自動掃描 `reports/*.csv`，並依照目前排序指標選出分數最好的實驗結果 CSV：
 
 ```bash
 python3 scripts/show_duplicate_results.py
@@ -349,7 +349,7 @@ python3 scripts/show_duplicate_results.py --select latest
 python3 scripts/show_duplicate_results.py --select default
 ```
 
-輸出會用 terminal-friendly 表格顯示排名。主要表格保留 `Recall`（Recall@k），不顯示 `Precision@k`，避免和 threshold 的 decision precision 混淆。若要依其他指標排序：
+輸出會用 terminal-friendly 摘要顯示最佳 ranking 結果，不再列出完整 ranking 表格，也不顯示 `Precision@k`，避免和 threshold 的 decision precision 混淆。若要改用其他指標選最佳結果：
 
 ```bash
 python3 scripts/show_duplicate_results.py --sort-by topk
@@ -361,7 +361,7 @@ python3 scripts/show_duplicate_results.py --sort-by topk
 python3 scripts/show_duplicate_results.py --sort-by recall
 ```
 
-`show_duplicate_results.py` 會自動顯示 ranking 結果，並在 `reports/` 找到 threshold JSON 時一起顯示 confusion matrix。若要產生或更新 confusion matrix，先在 `tune-threshold` 加上 `--output-json`：
+`show_duplicate_results.py` 會自動顯示最佳 ranking 結果，並在 `reports/` 找到 threshold JSON 時一起顯示 confusion matrix。若要產生或更新 confusion matrix，先在 `tune-threshold` 加上 `--output-json`：
 
 ```bash
 PYTHONPATH=src python3 -m duplicate_ticket_detection.cli tune-threshold \
@@ -373,7 +373,7 @@ PYTHONPATH=src python3 -m duplicate_ticket_detection.cli tune-threshold \
   --output-decisions-csv reports/tfidf_decision_threshold_p90_decisions.csv
 ```
 
-再用 `show_duplicate_results.py` 一起顯示 ranking 結果和混淆矩陣：
+再用 `show_duplicate_results.py` 一起顯示最佳 ranking 結果和混淆矩陣：
 
 ```bash
 python3 scripts/show_duplicate_results.py
@@ -386,7 +386,7 @@ python3 scripts/show_duplicate_results.py \
   --decision-json reports/tfidf_decision_threshold_p90.json
 ```
 
-若只想看 ranking 表格、不顯示混淆矩陣：
+若只想看最佳 ranking 結果、不顯示混淆矩陣：
 
 ```bash
 python3 scripts/show_duplicate_results.py --no-show-decision-matrix
