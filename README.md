@@ -120,6 +120,21 @@ PYTHONPATH=src python3 -m duplicate_ticket_detection.cli build-triplets \
 
 ## 下載 Bugzilla 資料
 
+若要讓資料完全由 Bugzilla API 取得，不手動準備 CSV/JSONL，可直接使用整合腳本。它會抓 duplicate tickets、補齊 duplicate masters，再抓一批 non-duplicate tickets，最後產生 ranking 與 confusion matrix 需要的資料集：
+
+```bash
+python3 scripts/prepare_bugzilla_dataset.py \
+  --base-url https://bugzilla.mozilla.org/rest \
+  --product Firefox \
+  --duplicate-limit 500 \
+  --non-duplicate-limit 1000 \
+  --duplicates-output data/mozilla_firefox_duplicates.csv \
+  --non-duplicates-output data/mozilla_firefox_non_duplicates.csv \
+  --decision-output data/mozilla_firefox_decision_eval.csv
+```
+
+這個流程的資料來源是 Bugzilla；輸出的 CSV 是下載後的實驗資料集，目的是讓後續訓練、5-fold 評估與結果重現可以使用同一份資料。
+
 可用 `scripts/fetch_bugzilla.py` 從 Bugzilla REST API 匯出 CSV。範例：
 
 ```bash
