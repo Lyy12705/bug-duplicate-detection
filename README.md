@@ -640,7 +640,7 @@ python3 scripts/analyze_duplicate_errors.py \
   --summary-md reports/top1_error_summary.md
 ```
 
-若要進一步改善 Top-1，可跑專用實驗：先用第一輪 SBERT 在 train fold 找出「錯排第 1 名」的候選，再把這些錯誤 Top-1 當成額外 hard negatives 重新訓練，最後一次測多組 metadata rerank 權重：
+若要進一步改善 Top-1，可跑專用實驗：先用第一輪 SBERT 在 train fold 找出「錯排第 1 名」的候選，再把這些錯誤 Top-1 當成額外 hard negatives 重新訓練，最後一次測多組 metadata rerank 權重。若要讓 Ranking 指標也納入半自動複核時使用的穩定排序，可加上 `--stable-rerank-grid`，同時比較 SBERT、TF-IDF agreement、metadata 一致性的混合排序：
 
 ```bash
 python3 scripts/run_top1_improvement_experiments.py \
@@ -651,13 +651,21 @@ python3 scripts/run_top1_improvement_experiments.py \
   --max-triplets 2000 \
   --negative-strategy hard \
   --negatives-per-anchor 3 \
+  --stable-rerank-grid \
   --output-csv reports/top1_improvement_experiment_results.csv \
   --output-md reports/top1_improvement_experiment_results.md
 ```
 
+若只想先測一組穩定排序權重，可改用：
+
+```bash
+--stable-rerank \
+--stable-rerank-configs tfidf:0.30,metadata:0.08,agreement:0.08
+```
+
 這個腳本會輸出：
 
-- `reports/top1_improvement_experiment_results.csv`：各組 combine/rerank 的 MAP、Top-1、Top-k、Recall、MRR。
+- `reports/top1_improvement_experiment_results.csv`：各組 combine/rerank/stable rerank 的 MAP、Top-1、Top-k、Recall、MRR。
 - `reports/top1_mined_hard_negatives.csv`：每個 fold 從 train 資料挖出的錯誤 Top-1 hard negatives。
 - `reports/top1_improvement_error_analysis.csv`：重新訓練與 rerank 後仍排錯第 1 名的案例，方便繼續分析錯誤是否集中在特定 product/component。
 

@@ -22,7 +22,8 @@ from duplicate_ticket_detection.dataset import TicketRecord, load_tickets, relev
 from duplicate_ticket_detection.rerank import RerankConfig, apply_metadata_rerank_scores, parse_field_weights
 from duplicate_ticket_detection.sbert_detector import SbertDuplicateDetector, SbertTrainingConfig
 from duplicate_ticket_detection.splits import DatasetSplit, kfold_ticket_splits
-from duplicate_ticket_detection.tfidf_detector import combine_similarity_scores
+from duplicate_ticket_detection.stable_rerank import StableRerankConfig, apply_stable_rerank_scores
+from duplicate_ticket_detection.tfidf_detector import TfidfDuplicateDetector, combine_similarity_scores
 from duplicate_ticket_detection.triplets import TripletRecord, build_triplets
 
 from run_duplicate_experiments import (
@@ -32,6 +33,7 @@ from run_duplicate_experiments import (
     print_result,
     score_matrix_metrics,
     sbert_score_matrices,
+    tfidf_score_matrices,
     write_results_csv,
     write_results_markdown,
 )
@@ -45,6 +47,11 @@ DEFAULT_RERANK_CONFIGS = (
     "component:0.02,product:0.01,severity:0.005,priority:0.005",
     "component:0.05,product:0.02",
     "component:0.05,product:0.02,severity:0.01,priority:0.01",
+)
+DEFAULT_STABLE_RERANK_CONFIGS = (
+    "tfidf:0.20,metadata:0.05,agreement:0.05",
+    "tfidf:0.30,metadata:0.08,agreement:0.08",
+    "tfidf:0.40,metadata:0.06,agreement:0.10",
 )
 
 
@@ -77,6 +84,14 @@ def main() -> int:
         help="Metadata rerank configs, e.g. component:0.02,product:0.01",
     )
     parser.add_argument("--rerank-candidate-pool", type=int, default=50)
+    parser.add_argument("--stable-rerank", action="store_true", help="Also evaluate TF-IDF/metadata agreement stable reranking")
+    parser.add_argument("--stable-rerank-grid", action="store_true", help="Evaluate a small grid of stable rerank weights")
+    parser.add_argument(
+        "--stable-rerank-configs",
+        nargs="*",
+        help="Stable rerank configs, e.g. tfidf:0.30,metadata:0.08,agreement:0.08",
+    )
+    parser.add_argument("--stable-candidate-pool", type=int, default=50)
     parser.add_argument("--output-csv", default="reports/top1_improvement_experiment_results.csv")
     parser.add_argument("--output-md", default="reports/top1_improvement_experiment_results.md")
     parser.add_argument("--mined-negatives-csv", default="reports/top1_mined_hard_negatives.csv")
@@ -86,10 +101,13 @@ def main() -> int:
     tickets = load_tickets(args.tickets)
     splits = kfold_ticket_splits(tickets, n_splits=args.folds, seed=args.seed)
     rerank_configs = rerank_configs_from_specs(args.rerank_configs, candidate_pool=args.rerank_candidate_pool)
+    stable_configs = stable_configs_from_args(args)
     print(f"tickets={len(tickets)} folds={len(splits)} top_k={args.top_k}", flush=True)
     print(f"combines={','.join(args.combines)}", flush=True)
     print(f"mining_combine={args.mining_combine}", flush=True)
     print(f"rerank_configs={';'.join(label for label, _ in rerank_configs)}", flush=True)
+    if stable_configs:
+        print(f"stable_rerank_configs={';'.join(label for label, _ in stable_configs)}", flush=True)
 
     rows: list[ResultRow] = []
     mined_rows: list[dict[str, str]] = []
@@ -97,7 +115,7 @@ def main() -> int:
 
     for split in splits:
         try:
-            fold_rows, fold_mined, fold_errors = run_fold(split, args, rerank_configs)
+            fold_rows, fold_mined, fold_errors = run_fold(split, args, rerank_configs, stable_configs)
             rows.extend(fold_rows)
             mined_rows.extend(fold_mined)
             error_rows.extend(fold_errors)
@@ -122,6 +140,7 @@ def run_fold(
     split: DatasetSplit,
     args: argparse.Namespace,
     rerank_configs: list[tuple[str, RerankConfig]],
+    stable_configs: list[tuple[str, StableRerankConfig]],
 ) -> tuple[list[ResultRow], list[dict[str, str]], list[dict[str, str]]]:
     print(f"[Top-1 improvement] {split.name}: training first-pass SBERT", flush=True)
     first_pass = train_detector(split.train, args, mined_negatives_by_anchor={})
@@ -153,12 +172,17 @@ def run_fold(
     seconds = time.perf_counter() - started
     try:
         test_title_scores, test_content_scores = sbert_score_matrices(detector, split.test, split.train)
+        tfidf_detector = TfidfDuplicateDetector(combine="max").fit(split.train)
+        tfidf_title_scores, tfidf_content_scores = tfidf_score_matrices(tfidf_detector, split.test, split.train)
         fold_rows, error_rows = evaluate_score_variants(
             split,
             args,
             test_title_scores,
             test_content_scores,
+            tfidf_title_scores,
+            tfidf_content_scores,
             rerank_configs,
+            stable_configs,
             seconds=seconds,
         )
     finally:
@@ -364,7 +388,10 @@ def evaluate_score_variants(
     args: argparse.Namespace,
     title_scores: np.ndarray,
     content_scores: np.ndarray,
+    tfidf_title_scores: np.ndarray,
+    tfidf_content_scores: np.ndarray,
     rerank_configs: list[tuple[str, RerankConfig]],
+    stable_configs: list[tuple[str, StableRerankConfig]],
     *,
     seconds: float,
 ) -> tuple[list[ResultRow], list[dict[str, str]]]:
@@ -372,6 +399,7 @@ def evaluate_score_variants(
     error_rows: list[dict[str, str]] = []
     for combine in args.combines:
         base_scores = combine_similarity_scores(title_scores, content_scores, combine)
+        tfidf_scores = combine_similarity_scores(tfidf_title_scores, tfidf_content_scores, combine)
         variants = [(combine, combine, base_scores)]
         for label, config in rerank_configs:
             reranked_scores = apply_metadata_rerank_scores(
@@ -384,7 +412,19 @@ def evaluate_score_variants(
             )
             variants.append((f"{combine}_{label}", f"{combine}+{label}", reranked_scores))
 
+        all_variants = list(variants)
         for variant_name, variant_combine, variant_scores in variants:
+            for stable_label, stable_config in stable_configs:
+                stable_scores = apply_stable_rerank_scores(
+                    split.test,
+                    split.train,
+                    variant_scores,
+                    tfidf_scores,
+                    stable_config,
+                )
+                all_variants.append((f"{variant_name}_{stable_label}", f"{variant_combine}+{stable_label}", stable_scores))
+
+        for variant_name, variant_combine, variant_scores in all_variants:
             metrics = score_matrix_metrics(split.test, split.train, variant_scores, top_k=args.top_k)
             row = ResultRow(
                 experiment=f"sbert_top1_mined_{variant_name}",
@@ -485,11 +525,65 @@ def rerank_configs_from_specs(specs: list[str], *, candidate_pool: int) -> list[
     return configs
 
 
+def stable_configs_from_args(args: argparse.Namespace) -> list[tuple[str, StableRerankConfig]]:
+    if args.stable_rerank_configs:
+        specs = args.stable_rerank_configs
+    elif args.stable_rerank_grid:
+        specs = list(DEFAULT_STABLE_RERANK_CONFIGS)
+    elif args.stable_rerank:
+        specs = ["tfidf:0.30,metadata:0.08,agreement:0.08"]
+    else:
+        return []
+
+    configs: list[tuple[str, StableRerankConfig]] = []
+    for spec in specs:
+        config = parse_stable_config(spec, candidate_pool=args.stable_candidate_pool)
+        configs.append((stable_label(config), config))
+    return configs
+
+
+def parse_stable_config(spec: str, *, candidate_pool: int) -> StableRerankConfig:
+    values = {"tfidf": 0.30, "metadata": 0.08, "agreement": 0.08}
+    for raw_part in spec.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            raise ValueError(f"Invalid stable rerank config: {spec!r}")
+        name, value = part.split(":", maxsplit=1)
+        name = name.strip().lower()
+        if name not in values:
+            raise ValueError(f"Unknown stable rerank weight: {name}")
+        parsed = float(value)
+        if parsed < 0:
+            raise ValueError("Stable rerank weights must be non-negative")
+        values[name] = parsed
+    return StableRerankConfig(
+        tfidf_weight=values["tfidf"],
+        metadata_weight=values["metadata"],
+        agreement_weight=values["agreement"],
+        candidate_pool=candidate_pool,
+    )
+
+
+def stable_label(config: StableRerankConfig) -> str:
+    return (
+        "stable_"
+        f"tfidf{format_weight(config.tfidf_weight)}_"
+        f"metadata{format_weight(config.metadata_weight)}_"
+        f"agreement{format_weight(config.agreement_weight)}"
+    )
+
+
 def rerank_label(field_weights: Iterable[tuple[str, float]]) -> str:
     return "rerank_" + "_".join(
         f"{field.replace('-', '_').replace('.', '_')}{weight:g}".replace(".", "p")
         for field, weight in field_weights
     )
+
+
+def format_weight(value: float) -> str:
+    return f"{value:g}".replace(".", "p")
 
 
 def save_outputs(
