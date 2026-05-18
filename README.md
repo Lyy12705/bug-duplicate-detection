@@ -1,8 +1,67 @@
 # Duplicate Ticket Detection
 
-這個專案先實作大專生計畫中的第一階段：判斷新進 ticket 是否可能是歷史 ticket 的重複回報。
+這個專案實作大專生計畫中的第一階段：自動找出新進 ticket 可能重複的歷史 ticket，協助工程師更快判斷 bug report 是否為 duplicate。
 
-目前可直接離線執行的是 `TF-IDF + cosine ranking` baseline；同時也保留文獻 Isotani et al. (2023) 的主方法接口：title/content 分開向量化、用 duplicate ticket 關係建立 triplet、以 SBERT triplet loss 微調，最後用 cosine similarity 排序並用 MAP 評估。
+目前系統定位為「半自動 duplicate candidate recommendation」，不是直接完全自動把 ticket 判成 duplicate。也就是：模型先產生 Top-k 疑似重複候選，工程師再根據候選清單、相似度分數、metadata 一致性與原始內容做最後確認。這個定位比較符合目前結果，因為 ranking 表現已經能有效把正確 duplicate 排進候選清單，但 threshold-based 的完全自動分類仍容易漏掉許多 duplicate。
+
+## 專案功能
+
+本專案目前提供以下功能：
+
+- 讀取 Bugzilla 或一般 CSV/JSONL ticket 資料，保留 `title`、`description`、`duplicate_of`、`product`、`component`、`severity`、`priority` 等欄位。
+- 建立 duplicate groups，讓同一組重複回報可以作為訓練與評估依據。
+- 提供 `TF-IDF + cosine similarity` baseline，作為可快速執行、可比較的傳統方法。
+- 依照文獻方法實作 `SBERT + triplet loss`，分別訓練 title model 與 content model，再合併兩者相似度。
+- 支援 hard negative mining，讓模型學習文字相似但其實不是同一個 duplicate group 的困難負樣本。
+- 支援 Top-1 mined hard negatives，將第一輪模型排錯第 1 名的案例回收成更有價值的訓練負樣本。
+- 支援 metadata reranking，利用 `component`、`product`、`severity`、`priority` 是否一致微調排序。
+- 支援 stable rerank，結合 SBERT 分數、TF-IDF 排名一致性、metadata 一致性與排名穩定度，讓工程師看到的候選順序更穩定。
+- 輸出 ranking 指標、threshold confusion matrix、錯誤分析報表與工程師複核用 CSV。
+
+## 主要流程
+
+整體流程如下：
+
+1. 準備 ticket 資料，並確認 duplicate ticket 的 master/original ticket 也在資料集中。
+2. 將 ticket 分成 train/test 或 5-fold cross-validation。
+3. 使用 TF-IDF baseline 或 SBERT triplet fine-tuning 建立 ranking model。
+4. 對每個 query ticket 計算與歷史 tickets 的相似度，產生 Top-k candidates。
+5. 使用 metadata rerank 與 stable rerank 調整候選順序。
+6. 用 MAP、Top-1、Top-k hit rate、Recall、MRR 評估 ranking 效果。
+7. 匯出工程師複核清單，由工程師決定候選 ticket 是否真的是 duplicate。
+8. 將工程師確認的錯誤案例回收成 hard negatives，持續改善 Top-1。
+
+## 模型技術
+
+本專案同時保留 baseline 與文獻方法，方便比較不同技術對 duplicate ranking 的影響。
+
+| 技術 | 說明 |
+|---|---|
+| TF-IDF baseline | 將 title/content 轉成 TF-IDF 向量，用 cosine similarity 排序。速度快、可解釋，適合作為 baseline。 |
+| SBERT fine-tuning | 使用 `sentence-transformers/all-MiniLM-L6-v2`，以 duplicate 關係建立 triplets，使用 triplet loss 微調 embedding。 |
+| Title/content 分開建模 | 分別計算 title similarity 與 content similarity，再用 `max`、`mean`、`title75`、`content75`、`weighted:0.6,0.4` 等策略合併。 |
+| Hard negative mining | 從相似但不屬於同一 duplicate group 的 ticket 建立較難負樣本，提高模型分辨能力。 |
+| Top-1 mined hard negatives | 先跑一輪模型，找出訓練集中錯排第 1 名的候選，再把這些錯誤 Top-1 當成 hard negatives 重新訓練。 |
+| Metadata rerank | 對 `component`、`product`、`severity`、`priority` 一致的候選加入小幅加權，降低跨類別誤判。 |
+| Stable rerank | 混合 SBERT 分數、TF-IDF agreement、metadata agreement 與排名一致性，讓 Top-k 候選更適合工程師人工複核。 |
+
+## 目前結果判讀
+
+目前最佳 ranking 結果來自 `top1_mined hard negative + weighted:0.6,0.4 + component rerank + stable rerank`。這代表系統不只使用 SBERT 相似度，也會參考 component 是否一致、TF-IDF 是否支持同一候選，以及排序是否穩定。
+
+| Ranking 指標 | 目前最佳值 | 判讀 |
+|---|---:|---|
+| MAP | 0.6884 | 整體排序品質中等偏好，正確 duplicate 越常排在前面分數越高。 |
+| Top-1 | 0.6639 | 約 66.39% 的 query，第一名候選就是正確 duplicate。若要完全自動判斷仍不夠，但已能減少工程師搜尋成本。 |
+| Top-k hit rate | 0.9180 | 約 91.80% 的 query，正確 duplicate 會出現在前 10 名候選中。這是目前最適合半自動複核流程的指標。 |
+| Ranking Recall | 0.8410 | 在 ranking 評估中，約 84.10% 的正確 duplicate 能被候選排序涵蓋。 |
+| MRR | 0.7535 | 第一個正確 duplicate 通常排得蠻前面，工程師不需要看太多筆才找到正確候選。 |
+
+和上一版最佳 ranking 相比，stable rerank 後的 MAP 從 0.6754 提升到 0.6884，Top-1 從 0.6449 提升到 0.6639，Top-k hit rate 從 0.8955 提升到 0.9180，MRR 從 0.7304 提升到 0.7535。也就是說，最新版本不只是第一名略有提升，前 10 名候選的穩定性也更好。
+
+另外，`show_duplicate_results.py` 也會顯示 threshold-based 的 confusion matrix。這部分是用單一 threshold 嘗試做「duplicate / non-duplicate」二元判斷，目前保守設定下 precision 約 0.9048，但 recall 只有 0.0619。代表它很少把 non-duplicate 誤判成 duplicate，但會漏掉大量真正 duplicate。因此目前不建議把系統定位成完全自動分類器，而是先以 Top-k candidate recommendation 為主。
+
+簡單來說，目前最有價值的結果是 Ranking：模型能在前 10 名候選中找回大多數正確 duplicate，適合做工程師輔助工具；Confusion Matrix 則是後續要發展全自動判斷時的參考。
 
 ## 文獻方法對應
 
